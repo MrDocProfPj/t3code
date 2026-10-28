@@ -63,6 +63,7 @@ const fakePool = (
     const commands: Array<{ readonly args: ReadonlyArray<string>; readonly cwd?: string }> = [];
     let leases = 0;
     let renewStatus = 200;
+    let catalog: unknown = CATALOG;
     const http = HttpClient.make((request) =>
       Effect.sync(() => {
         const url = new URL(request.url);
@@ -71,7 +72,7 @@ const fakePool = (
           HttpClientResponse.fromWeb(request, Response.json(body, { status }));
         if (request.headers.authorization !== "Bearer agent-token")
           return json({ error: { code: "UNAUTHENTICATED", message: "Unknown bearer token" } }, 401);
-        if (url.pathname === "/v1/catalog") return json(CATALOG);
+        if (url.pathname === "/v1/catalog") return json(catalog);
         if (url.pathname.endsWith("/renew")) return json({}, renewStatus);
         if (request.method === "DELETE") return json({}, 202);
         return json({}, 404);
@@ -135,6 +136,9 @@ const fakePool = (
       ran,
       endLeases: () => {
         renewStatus = 404;
+      },
+      setCatalog: (next: unknown) => {
+        catalog = next;
       },
     };
   });
@@ -303,6 +307,23 @@ describe("Simlock device host", () => {
         reason: "Add an agent token for Device pool in Settings.",
       });
       expect(pool.requests).toHaveLength(requests);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  it.effect("lists the pool again as soon as its workers return", () =>
+    Effect.gen(function* () {
+      const pool = yield* fakePool();
+      const scope = yield* Scope.make();
+      const host = yield* makeHost(pool, config(), scope);
+      const ready = yield* host.ensureReady(() => Effect.void);
+      // Mid-reconnect, the gateway knows the models but no worker that makes them.
+      pool.setCatalog({
+        platforms: [{ ...CATALOG.platforms[1]!, modelWorkers: { "Pixel 9": [], "Pixel 8": [] } }],
+      });
+      expect((yield* ready.devices.list).devices).toEqual([]);
+      pool.setCatalog(CATALOG);
+      expect((yield* ready.devices.list).devices.length).toBeGreaterThan(0);
+      yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 

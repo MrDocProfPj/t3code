@@ -306,7 +306,8 @@ export const make = Effect.fn("SimlockDeviceHost.make")(function* (
         ];
       });
     });
-    catalog = { at: now, devices };
+    // An empty catalog is usually workers reconnecting; caching it would hide the pool for the TTL.
+    catalog = devices.length > 0 ? { at: now, devices } : null;
     return devices;
   });
 
