@@ -1472,6 +1472,24 @@ describe("incremental v2 timeline entries", () => {
       expect(next.entries[index]).toBe(entry);
   });
 
+  it("re-derives only the work entry whose tool item changed", () => {
+    const fixture = makeStreamingTimelineFixture("Partial");
+    const visibleTurnItems = fixture.visibleTurnItems.map((row) =>
+      row.item.id === "live-work"
+        ? { ...row, item: { ...row.item, status: "running" as const, completedAt: null } }
+        : row,
+    );
+    const input = { visibleTurnItems, optimisticMessages: [] };
+    const previous = deriveTimelineEntriesFromVisibleTurnItemsWithState(input);
+    const nextInput = { ...input, visibleTurnItems: fixture.visibleTurnItems };
+    const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(nextInput, previous);
+    expect(next.entries).toEqual(deriveTimelineEntriesFromVisibleTurnItems(nextInput));
+    for (const [index, entry] of previous.entries.entries()) {
+      if (entry.id === "live-work") expect(next.entries[index]).not.toBe(entry);
+      else expect(next.entries[index]).toBe(entry);
+    }
+  });
+
   it.each(["completion", "provenance", "ordering", "attachment", "run"] as const)(
     "rebuilds entries for a %s change instead of retaining stale v2 metadata",
     (change) => {
