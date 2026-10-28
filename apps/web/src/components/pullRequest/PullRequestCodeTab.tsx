@@ -80,7 +80,7 @@ import { useDiffWorkerPool } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { DiffFileTree } from "../diffs/DiffFileTree";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
-import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
+import { diffFileTreeEntries, orderDiffFilesLikeTree } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -496,8 +496,10 @@ function PullRequestCodeTab({
       ignoreWhitespace,
     ),
   );
-  const files = parsedSlices.flatMap((parsed) =>
-    parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
+  const files = orderDiffFilesLikeTree(
+    parsedSlices.flatMap((parsed) =>
+      parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
+    ),
   );
   const filePaths = files.map((file) => resolveFileDiffPath(file));
   const omittedFileStats = new Map(
