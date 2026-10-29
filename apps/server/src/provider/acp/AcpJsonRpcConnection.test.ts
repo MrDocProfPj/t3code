@@ -105,6 +105,9 @@ describe("AcpSessionRuntime", () => {
       expect((yield* updates)[0]?.configOptions).toEqual(selected.configOptions);
       yield* runtime.request("_test/startup-metadata", {});
       expect((yield* updates)[0]?.configOptions).toEqual(yield* runtime.getConfigOptions);
+      // A mode written as a config option must move the mode state that plan restore reads.
+      yield* runtime.setConfigOption("mode", "architect");
+      expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "architect" });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
