@@ -6,6 +6,7 @@ import {
   isKiroAcpCommand,
   KIRO_HIDDEN_CONFIG_OPTION_IDS,
   kiroConfigOptionsForPolicy,
+  kiroMcpStatusNotices,
   kiroT3McpBlockedReason,
 } from "./kiroAcp.ts";
 import { normalizeAcpRegistryLiveConfiguration } from "./probe.ts";
@@ -119,5 +120,43 @@ describe("kiroT3McpBlockedReason", () => {
       }),
     ).toBeUndefined();
     expect(kiroT3McpBlockedReason({ sessionId: settled.sessionId })).toBeUndefined();
+  });
+});
+
+describe("kiroMcpStatusNotices", () => {
+  const { connecting, settled } = fixture.mcpStatus;
+
+  it("stays quiet while servers connect", () => {
+    expect(kiroMcpStatusNotices(connecting)).toEqual([]);
+    // The capture ends with one stdio server still starting.
+    expect(kiroMcpStatusNotices(settled)).toEqual([]);
+  });
+
+  it("reports a timed-out server and summarizes once every server settles", () => {
+    const notices = kiroMcpStatusNotices({
+      ...settled,
+      servers: settled.servers.map((server) =>
+        server.status === "connecting"
+          ? { ...server, status: "error", error: "connection timed out after 60000ms" }
+          : server,
+      ),
+    });
+    expect(notices).toEqual([
+      {
+        key: "server:azure-devops-repositories:error",
+        title: "Kiro MCP server azure-devops-repositories: error",
+        description: "connection timed out after 60000ms",
+      },
+      {
+        key: "settled",
+        title: "Kiro MCP servers started with errors",
+        description: [
+          "Connected: cloud-remote (2 tools), azure-devops-pipelines (2 tools), azure-devops-work (2 tools), issue-tracker (2 tools)",
+          "Not connected: azure-devops-repositories (error)",
+          "Blocked by MCP policy: aws, fetch, microsoft-learn, internal-docs, computer-use, power-transform",
+          "Not in the MCP registry: azure-devops",
+        ].join("\n"),
+      },
+    ]);
   });
 });
