@@ -283,6 +283,12 @@ export interface AcpAdapterV2Flavor {
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;
+  /** Native config options T3 neither shows nor lets stored selections set. */
+  readonly hiddenConfigOptionIds?: ReadonlySet<string>;
+  /** Native config values applied after the user's selections, such as runtime policy mirrors. */
+  readonly configOptionsForPolicy?: (
+    policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+  ) => ReadonlyArray<{ readonly id: string; readonly value: string }>;
   readonly clientFileSystem?: {
     readonly readTextFile: (
       request: EffectAcpSchema.ReadTextFileRequest,
@@ -6745,9 +6751,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const modeSelection = hasNativeConfigWithSyntheticModeId
             ? undefined
             : optionSelections.find((selection) => selection.id === ACP_SESSION_MODE_OPTION_ID);
-          const configSelections = hasNativeConfigWithSyntheticModeId
-            ? optionSelections
-            : optionSelections.filter((selection) => selection.id !== ACP_SESSION_MODE_OPTION_ID);
+          const policySelections = flavor.configOptionsForPolicy?.(runtimePolicy) ?? [];
+          const policyIds = new Set(policySelections.map((selection) => selection.id));
+          const configSelections = [
+            ...(hasNativeConfigWithSyntheticModeId
+              ? optionSelections
+              : optionSelections.filter((selection) => selection.id !== ACP_SESSION_MODE_OPTION_ID)
+            ).filter(
+              (selection) =>
+                flavor.hiddenConfigOptionIds?.has(selection.id) !== true &&
+                !policyIds.has(selection.id),
+            ),
+            ...policySelections.filter((selection) =>
+              configOptions.some(
+                (option) => option.id === selection.id && option.currentValue !== selection.value,
+              ),
+            ),
+          ];
           // Probe descriptors union models; skip options absent from the live session and use agent defaults.
           const unsupportedConfigIds = configSelections
             .map((selection) => selection.id)

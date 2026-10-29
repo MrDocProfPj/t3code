@@ -55,7 +55,9 @@ function selectChoices(
 export function acpProviderOptionDescriptors(input: {
   readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined;
   readonly modeState: AcpSessionModeState | undefined;
+  readonly hiddenOptionIds?: ReadonlySet<string> | undefined;
 }): ReadonlyArray<ProviderOptionDescriptor> {
+  const hidden = input.hiddenOptionIds;
   const descriptors: Array<ProviderOptionDescriptor> = [];
   const seen = new Set<string>();
   const mirroredModeChoiceSets: Array<ReadonlySet<string>> = [];
@@ -64,6 +66,11 @@ export function acpProviderOptionDescriptors(input: {
   for (const option of input.configOptions ?? []) {
     // Model and collaboration_mode choices use T3 model and interaction controls.
     if (option.category === "model" || option.category === "collaboration_mode") {
+      continue;
+    }
+    if (hidden?.has(option.id) === true) {
+      // A hidden native mode option must not be replaced by the synthetic mode picker.
+      if (option.category === "mode") hasModeCategory = true;
       continue;
     }
     const id = boundedOpaqueValue(option.id, MAX_TEXT_LENGTH);
@@ -107,7 +114,11 @@ export function acpProviderOptionDescriptors(input: {
   }
 
   const modeState = input.modeState;
-  if (modeState !== undefined && !hasModeCategory) {
+  if (
+    modeState !== undefined &&
+    !hasModeCategory &&
+    hidden?.has(ACP_SESSION_MODE_OPTION_ID) !== true
+  ) {
     const choices = selectChoices(
       modeState.availableModes.map((mode) => ({
         value: mode.id,

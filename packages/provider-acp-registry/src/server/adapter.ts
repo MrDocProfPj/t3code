@@ -10,6 +10,11 @@ import {
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
 import {
+  isKiroAcpCommand,
+  KIRO_HIDDEN_CONFIG_OPTION_IDS,
+  kiroConfigOptionsForPolicy,
+} from "./kiroAcp.ts";
+import {
   copilotClientCapabilitiesMeta,
   extractCopilotSubagentUpdate,
   makeCopilotSubagentRouting,
@@ -197,6 +202,8 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       /^claude-agent-acp(\.exe|\.cmd)?$/i.test(
         options.settings.commandPath.split(/[\\/]/).pop() ?? "",
       ));
+  const isKiro = isKiroAcpCommand(options.settings);
+  const hiddenConfigOptionIds = isKiro ? KIRO_HIDDEN_CONFIG_OPTION_IDS : undefined;
   const runtimeOptions = isClaude
     ? {
         ...options,
@@ -215,6 +222,12 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
     ...(registryAgentId === "factory-droid"
       ? { extractElicitationForm: extractDroidElicitationForm }
+      : {}),
+    ...(isKiro
+      ? {
+          hiddenConfigOptionIds: KIRO_HIDDEN_CONFIG_OPTION_IDS,
+          configOptionsForPolicy: kiroConfigOptionsForPolicy,
+        }
       : {}),
     ...(registryAgentId === "mistral-vibe"
       ? { registerExtensions: registerMistralVibeAcpExtensions }
@@ -258,7 +271,12 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           onSessionConfigurationUpdate: (configOptions, modeState, modelState) =>
             runtimeCoordinator.publishLiveConfiguration(
               options.instanceId,
-              normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState),
+              normalizeAcpRegistryLiveConfiguration(
+                configOptions,
+                modeState,
+                modelState,
+                hiddenConfigOptionIds,
+              ),
             ),
           onUrlElicitation: ({ elicitationId, url, message }) => {
             const normalizedUrl = normalizeAcpRegistryWebUrl(url);

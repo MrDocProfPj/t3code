@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import kiroFixture from "../../../../../packages/provider-acp-registry/test/fixtures/kiro-acp.json" with { type: "json" };
 import { assert, describe, it } from "@effect/vitest";
 import {
   MessageId,
@@ -465,6 +466,8 @@ describe("AcpRegistryAdapterV2", () => {
       readonly customModels?: ReadonlyArray<string>;
       readonly storedModel?: string;
       readonly storedModePick?: string;
+      readonly storedOptions?: ReadonlyArray<{ readonly id: string; readonly value: string }>;
+      readonly settings?: Record<string, unknown>;
       readonly turnModels?: ReadonlyArray<string>;
     }) {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -515,6 +518,7 @@ describe("AcpRegistryAdapterV2", () => {
           agentId: "fixture-agent",
           authMethodId: "test",
           customModels: input.customModels ?? [],
+          ...input.settings,
         }),
         environment: {},
         makeRuntime: makeAcpReplayRuntime({
@@ -550,9 +554,12 @@ describe("AcpRegistryAdapterV2", () => {
       const stored: ModelSelection = {
         instanceId,
         model: input.storedModel ?? "default",
-        ...(input.storedModePick === undefined
-          ? {}
-          : { options: [{ id: ACP_SESSION_MODE_OPTION_ID, value: input.storedModePick }] }),
+        options: [
+          ...(input.storedModePick === undefined
+            ? []
+            : [{ id: ACP_SESSION_MODE_OPTION_ID, value: input.storedModePick }]),
+          ...(input.storedOptions ?? []),
+        ],
       };
       const configurations: Array<AcpRegistryLiveConfiguration | undefined> = [];
       yield* Effect.gen(function* () {
@@ -637,6 +644,37 @@ describe("AcpRegistryAdapterV2", () => {
           answer("session/set_config_option", { configOptions: [permissionModeOption("auto")] }),
         ],
         storedModePick: "auto",
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+    );
+
+    it.effect("hides Kiro IDE controls and drives autopilot from the runtime mode", () =>
+      Effect.gen(function* () {
+        const kiroOptions = (mode: string, autopilot: string) =>
+          kiroFixture.sessionNew.configOptions.map((option) =>
+            option.id === "mode"
+              ? { ...option, currentValue: mode }
+              : option.id === "autopilot"
+                ? { ...option, currentValue: autopilot }
+                : option,
+          );
+        const setOption = (configId: string, value: string, after: ReadonlyArray<unknown>) => [
+          outbound("session/set_config_option", { sessionId: "agent-session", configId, value }),
+          answer("session/set_config_option", { configOptions: after }),
+        ];
+        const { configurations } = yield* openWithStoredPicks({
+          settings: { source: "local", agentId: "", commandPath: "C:\\Kiro-Cli\\kiro-cli.exe" },
+          setup: { configOptions: kiroOptions("spec", "on") },
+          // Picks saved before the controls were hidden must not reach the agent.
+          storedOptions: [
+            { id: "autopilot", value: "on" },
+            { id: "memoryReflection", value: "on" },
+          ],
+          pickFrames: [
+            ...setOption("mode", "vibe", kiroOptions("vibe", "on")),
+            ...setOption("autopilot", "off", kiroOptions("vibe", "off")),
+          ],
+        });
+        assert.deepEqual(configurations[0]?.configOptions, []);
       }).pipe(Effect.provide(layerTest), Effect.scoped),
     );
 
