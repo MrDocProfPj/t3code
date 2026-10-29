@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import kiroFixture from "../../../../../packages/provider-acp-registry/test/fixtures/kiro-acp.json" with { type: "json" };
 import { assert, describe, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
@@ -56,6 +56,7 @@ import {
   makeAcpRegistryAdapterV2,
   acpRegistryPromptFailure,
   acpRegistryProbeResult,
+  kiroAcpFixture as kiroFixture,
 } from "@t3tools/provider-acp-registry/testing";
 
 const decodeAcpRegistryAdapterSettings = Schema.decodeUnknownEffect(
@@ -675,6 +676,126 @@ describe("AcpRegistryAdapterV2", () => {
           ],
         });
         assert.deepEqual(configurations[0]?.configOptions, []);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+    );
+
+    it.effect("routes T3 tools through PowerShell when Kiro's MCP policy drops them", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const replayDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-acp-registry-kiro-blocked-",
+        });
+        const statusPath = path.join(replayDir, "status.json");
+        const transcript = yield* decodeAcpReplayTranscript(
+          {
+            provider: ACP_REGISTRY_PROVIDER,
+            protocol: "acp.ndjson-jsonrpc",
+            version: "1",
+            scenario: "kiro-mcp-blocked",
+            entries: [
+              outbound("initialize"),
+              answer("initialize", kiroFixture.initialize),
+              outbound("session/new"),
+              {
+                type: "emit_inbound",
+                frame: {
+                  kind: "notification",
+                  method: "_kiro/mcp/status",
+                  params: { ...kiroFixture.mcpStatus.connecting, sessionId: "agent-session" },
+                },
+              },
+              answer("session/new", {
+                sessionId: "agent-session",
+                configOptions: kiroFixture.sessionNew.configOptions,
+              }),
+              outbound("session/prompt", {
+                sessionId: "agent-session",
+                prompt: [
+                  {
+                    type: "text",
+                    text: "<any>MCP policy blocked T3 Code's MCP server<any>$env:T3_ACP_MCP_ARGUMENTS='{}'; & $env:T3_ACP_MCP_NODE<any>",
+                  },
+                  { type: "text", text: "<runtime_info><any>" },
+                ],
+              }),
+              answer("session/prompt", { stopReason: "end_turn" }),
+            ] as never,
+          },
+          ACP_REGISTRY_PROVIDER,
+        );
+        const instanceId = ProviderInstanceId.make("acp-registry-kiro");
+        const threadId = ThreadId.make("thread-acp-registry-kiro");
+        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+          environmentId: EnvironmentId.make("environment-acp-registry-kiro"),
+          threadId,
+          providerSessionId: "mcp-session-acp-registry-kiro",
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer kiro-token",
+          browserToolsAvailable: true,
+        });
+        const adapter = yield* makeAcpRegistryAdapterV2({
+          selfInvocation: yield* resolveSelfInvocation(),
+          instanceId,
+          platform: "win32",
+          settings: yield* decodeAcpRegistryAdapterSettings({
+            source: "local",
+            commandPath: "C:\\Kiro-Cli\\kiro-cli.exe",
+          }),
+          environment: {},
+          makeRuntime: makeAcpReplayRuntime({
+            transcript,
+            statusPath,
+            scriptPath: yield* path.fromFileUrl(
+              new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
+            ),
+            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+            fileSystem,
+          }),
+        }).pipe(Effect.provide(layerInjectedRuntimeCatalog));
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: replayDir,
+        });
+        const modelSelection: ModelSelection = { instanceId, model: "auto" };
+        const notices = yield* Effect.gen(function* () {
+          const runtime = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-kiro"),
+            modelSelection,
+            runtimePolicy,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn(
+            makeTurnInput({
+              threadId,
+              providerThread,
+              instanceId,
+              runtimePolicy,
+              now: yield* DateTime.now,
+              ordinal: 1,
+              modelSelection,
+            }),
+          );
+          return Array.from(
+            yield* runtime.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runCollect,
+            ),
+          ).flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+              ? [event.turnItem.title]
+              : [],
+          );
+        }).pipe(Effect.scoped);
+        assert.deepEqual(notices, ["T3 tools run through the terminal"]);
+        yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
       }).pipe(Effect.provide(layerTest), Effect.scoped),
     );
 

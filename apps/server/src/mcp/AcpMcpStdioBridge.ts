@@ -319,6 +319,34 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
   });
 }
 
+const ACP_MCP_ARGUMENTS_ENV = "T3_ACP_MCP_ARGUMENTS";
+
+/**
+ * Arguments come from the command line or, when omitted, from T3_ACP_MCP_ARGUMENTS. The
+ * environment form survives PowerShell and cmd, which mangle quoted JSON passed to native
+ * programs, and the Windows Electron executable, which starts without stdin.
+ */
+export function parseAcpMcpCallArguments(
+  args: ReadonlyArray<string>,
+  env: NodeJS.ProcessEnv,
+): { readonly tool: string; readonly parsed: Record<string, unknown> } | string {
+  const [tool, argumentsArgument] = args;
+  const argumentsJson = argumentsArgument ?? env[ACP_MCP_ARGUMENTS_ENV];
+  if (tool === undefined || argumentsJson === undefined) {
+    return `acp-mcp-call requires <tool> and <arguments-json>, or <tool> with ${ACP_MCP_ARGUMENTS_ENV} set.`;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson);
+  } catch {
+    return "acp-mcp-call arguments must be valid JSON.";
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return "acp-mcp-call arguments must be a JSON object.";
+  }
+  return { tool, parsed: parsed as Record<string, unknown> };
+}
+
 /** Avoid heavy imports on the ACP first-message path. */
 export async function runAcpMcpCliFastPath(
   command: "acp-mcp-bridge" | "acp-mcp-call",
@@ -342,25 +370,13 @@ export async function runAcpMcpCliFastPath(
     );
     return;
   }
-  const [tool, argumentsJson] = args;
-  if (tool === undefined || argumentsJson === undefined) {
-    process.stderr.write("acp-mcp-call requires <tool> and <arguments-json>.\n");
+  const call = parseAcpMcpCallArguments(args, process.env);
+  if (typeof call === "string") {
+    process.stderr.write(`${call}\n`);
     process.exitCode = 2;
     return;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(argumentsJson);
-  } catch {
-    process.stderr.write("acp-mcp-call arguments must be valid JSON.\n");
-    process.exitCode = 2;
-    return;
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    process.stderr.write("acp-mcp-call arguments must be a JSON object.\n");
-    process.exitCode = 2;
-    return;
-  }
+  const { tool, parsed } = call;
   const result = await Effect.runPromise(
     callAcpMcpTool({
       endpoint,

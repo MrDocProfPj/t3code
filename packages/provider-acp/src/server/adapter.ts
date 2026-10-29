@@ -197,6 +197,11 @@ export interface AcpAdapterV2ExtensionContext {
   >;
   readonly captureProposedPlan: (input: { readonly planMarkdown: string }) => Effect.Effect<void>;
   readonly lastProposedPlanMarkdown: Effect.Effect<string | undefined>;
+  /** For agents that report dropping T3's MCP server, e.g. under an MCP allowlist policy. */
+  readonly reportT3McpBlocked: (notice: {
+    readonly sessionId: string;
+    readonly reason: string;
+  }) => Effect.Effect<void>;
 }
 
 /**
@@ -283,6 +288,8 @@ export interface AcpAdapterV2Flavor {
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   ) => string | undefined;
+  /** Shell the agent runs terminal commands in; selects the T3 MCP terminal fallback syntax. */
+  readonly agentTerminal?: "posix" | "powershell";
   /** Native config options T3 neither shows nor lets stored selections set. */
   readonly hiddenConfigOptionIds?: ReadonlySet<string>;
   /** Native config values applied after the user's selections, such as runtime policy mirrors. */
@@ -1600,6 +1607,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const activeSelection = yield* Ref.make<ModelSelection | null>(null);
         const activeInteractionMode = yield* Ref.make<ProviderInteractionMode | null>(null);
         const promptInstructionStates = yield* Ref.make(new Map<string, T3AcpInstructionState>());
+        // Keyed by native session; the reason shows once, in the first turn after the report.
+        const t3McpBlockedSessions = yield* Ref.make(
+          new Map<string, { readonly reason: string; readonly noticed: boolean }>(),
+        );
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
         const runtimeRestartRequired = yield* Ref.make(false);
@@ -3922,6 +3933,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               completedAt: now,
               updatedAt: now,
             },
+          });
+        });
+
+        const noticeT3McpBlocked = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+          const blocked = (yield* Ref.get(t3McpBlockedSessions)).get(context.nativeThreadId);
+          if (blocked === undefined || blocked.noticed || context.finalized) return;
+          yield* Ref.update(t3McpBlockedSessions, (current) =>
+            new Map(current).set(context.nativeThreadId, { ...blocked, noticed: true }),
+          );
+          yield* emitNotice(context, {
+            title: "T3 tools run through the terminal",
+            description: blocked.reason,
           });
         });
 
@@ -6282,6 +6305,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               requestUserInput,
               captureProposedPlan,
               lastProposedPlanMarkdown,
+              reportT3McpBlocked: (notice) =>
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    if ((yield* Ref.get(t3McpBlockedSessions)).has(notice.sessionId)) return;
+                    yield* Ref.update(t3McpBlockedSessions, (current) =>
+                      new Map(current).set(notice.sessionId, {
+                        reason: notice.reason,
+                        noticed: false,
+                      }),
+                    );
+                    const context = yield* Ref.get(activeTurn);
+                    if (context !== null) yield* noticeT3McpBlocked(context);
+                  }),
+                ).pipe(Effect.asVoid),
               finishSubagent: (notice) =>
                 runRuntimeCallbackAtGeneration(
                   handlerGeneration,
@@ -7205,6 +7243,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             interactionMode: turnInput.runtimePolicy.interactionMode,
             hasT3Mcp: acpMcpContext(mcpSession, self).servers.length > 0,
             hasDeviceTools: mcpSession?.capabilities?.has("device") === true,
+            t3McpBlocked: (yield* Ref.get(t3McpBlockedSessions)).has(sessionId),
+            terminal: flavor.agentTerminal ?? "posix",
           } satisfies T3AcpInstructionState;
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
@@ -7541,6 +7581,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               createdAt: startedAt,
               updatedAt: startedAt,
             });
+            yield* noticeT3McpBlocked(context);
             if (followsAgentWorkState)
               yield* runtimeCallbackPermit.withPermit(syncNativeChildren(context));
             const attached = turnAttached;

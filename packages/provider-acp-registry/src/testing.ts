@@ -21,3 +21,4 @@ export {
   type AcpRegistryAvailableCommands,
   type AcpRegistryLiveConfiguration,
 } from "./server/probe.ts";
+export { default as kiroAcpFixture } from "../test/fixtures/kiro-acp.json" with { type: "json" };

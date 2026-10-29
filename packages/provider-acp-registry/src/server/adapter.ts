@@ -13,6 +13,7 @@ import {
   isKiroAcpCommand,
   KIRO_HIDDEN_CONFIG_OPTION_IDS,
   kiroConfigOptionsForPolicy,
+  registerKiroAcpExtensions,
 } from "./kiroAcp.ts";
 import {
   copilotClientCapabilitiesMeta,
@@ -75,6 +76,7 @@ export interface AcpRegistryAdapterV2Options {
   readonly settings: AcpRegistrySettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly selfInvocation: SelfInvocation;
+  readonly platform?: NodeJS.Platform;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly makeRuntime?: (
     input: AcpAdapterV2RuntimeInput,
@@ -227,6 +229,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       ? {
           hiddenConfigOptionIds: KIRO_HIDDEN_CONFIG_OPTION_IDS,
           configOptionsForPolicy: kiroConfigOptionsForPolicy,
+          registerExtensions: registerKiroAcpExtensions,
+          // Kiro runs commands in PowerShell on Windows.
+          ...(options.platform === "win32" ? { agentTerminal: "powershell" as const } : {}),
         }
       : {}),
     ...(registryAgentId === "mistral-vibe"
@@ -343,6 +348,7 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
         selfInvocation,
+        platform: yield* HostProcess.Platform,
         continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
         nativeLogging: (threadId) =>
           makeNativeLogger({

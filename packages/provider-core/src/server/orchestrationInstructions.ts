@@ -56,8 +56,18 @@ export const T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH = deviceToolInstr
 );
 
 // ACP only: some ACP agents accept the injected MCP server but never expose
-// its tools, so they need the terminal transport other harnesses never use.
-const T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS = `ACP fallback: if the T3 tools are absent and \`T3_ACP_MCP_NODE\` is present, call them through the terminal: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset for a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
+// its tools, and some drop it under an MCP policy, so they need the terminal
+// transport other harnesses never use.
+function acpMcpFallbackInstructions(state: T3AcpInstructionState): string {
+  const lead = state.t3McpBlocked
+    ? "ACP fallback: this agent's MCP policy blocked T3 Code's MCP server, so the T3 tools are not available as tools in this session. Call each of them through the terminal"
+    : "ACP fallback: if the T3 tools are absent and `T3_ACP_MCP_NODE` is present, call them through the terminal";
+  if (state.terminal === "powershell") {
+    // Native-program quoting mangles JSON in PowerShell, so arguments travel in the environment.
+    return `${lead} in PowerShell, passing JSON arguments in \`$env:T3_ACP_MCP_ARGUMENTS\`: \`$env:ELECTRON_RUN_AS_NODE='1'; $env:T3_ACP_MCP_ARGUMENTS='{}'; & $env:T3_ACP_MCP_NODE $env:T3_ACP_MCP_ENTRYPOINT acp-mcp-call orchestrator_capabilities\`. Delegate by setting \`$env:T3_ACP_MCP_ARGUMENTS='{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\` and running \`acp-mcp-call delegate_task\` the same way. Double any \`'\` inside the JSON.`;
+  }
+  return `${lead}: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset for a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
+}
 
 const T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Default
 
@@ -71,6 +81,10 @@ export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  /** The agent reported dropping T3's MCP server, so the terminal is the only route. */
+  readonly t3McpBlocked?: boolean;
+  /** Shell the agent's terminal commands run in, from the server's platform. */
+  readonly terminal?: "posix" | "powershell";
 }
 
 /** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
@@ -84,7 +98,9 @@ export function t3AcpPromptWithInstructions(input: {
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
     input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
-    input.previousState.hasDeviceTools === input.state.hasDeviceTools
+    input.previousState.hasDeviceTools === input.state.hasDeviceTools &&
+    input.previousState.t3McpBlocked === input.state.t3McpBlocked &&
+    input.previousState.terminal === input.state.terminal
   ) {
     return input.prompt;
   }
@@ -97,7 +113,7 @@ export function t3AcpPromptWithInstructions(input: {
           T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),
           ...(input.state.hasDeviceTools ? [T3_CODE_DEVICE_TOOL_INSTRUCTIONS] : []),
           T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
-          T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
+          acpMcpFallbackInstructions(input.state),
         ]
       : []),
   ];

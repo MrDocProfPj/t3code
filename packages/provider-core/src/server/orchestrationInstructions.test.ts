@@ -83,3 +83,36 @@ describe("T3 device instructions", () => {
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## T3 Code devices");
   });
 });
+
+describe("T3 ACP terminal fallback", () => {
+  const state = { interactionMode: "default", hasT3Mcp: true, hasDeviceTools: false } as const;
+  const prompt = (overrides: Partial<Parameters<typeof t3AcpPromptWithInstructions>[0]["state"]>) =>
+    t3AcpPromptWithInstructions({ prompt: "Hi.", state: { ...state, ...overrides } });
+
+  it("uses POSIX syntax unless the agent's terminal is PowerShell", () => {
+    assert.include(prompt({}), `ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE"`);
+    const powershell = prompt({ terminal: "powershell" });
+    // pwsh rejects VAR=value prefixes and mangles quoted JSON passed to native programs.
+    assert.notInclude(powershell, "ELECTRON_RUN_AS_NODE=1 ");
+    assert.include(
+      powershell,
+      "`$env:ELECTRON_RUN_AS_NODE='1'; $env:T3_ACP_MCP_ARGUMENTS='{}'; & $env:T3_ACP_MCP_NODE $env:T3_ACP_MCP_ENTRYPOINT acp-mcp-call orchestrator_capabilities`",
+    );
+  });
+
+  it("states the block instead of a conditional once the agent reports it", () => {
+    assert.include(prompt({}), "if the T3 tools are absent");
+    const blocked = prompt({ t3McpBlocked: true, terminal: "powershell" });
+    assert.include(blocked, "MCP policy blocked T3 Code's MCP server");
+    assert.notInclude(blocked, "if the T3 tools are absent");
+  });
+
+  it("resends the instructions when a block is reported after the first turn", () => {
+    const resent = t3AcpPromptWithInstructions({
+      prompt: "Next.",
+      state: { ...state, t3McpBlocked: true },
+      previousState: state,
+    });
+    assert.include(resent, "MCP policy blocked T3 Code's MCP server");
+  });
+});

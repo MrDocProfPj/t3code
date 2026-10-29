@@ -6,6 +6,7 @@ import {
   isKiroAcpCommand,
   KIRO_HIDDEN_CONFIG_OPTION_IDS,
   kiroConfigOptionsForPolicy,
+  kiroT3McpBlockedReason,
 } from "./kiroAcp.ts";
 import { normalizeAcpRegistryLiveConfiguration } from "./probe.ts";
 import fixture from "../../test/fixtures/kiro-acp.json" with { type: "json" };
@@ -97,5 +98,26 @@ describe("Kiro composer options", () => {
       { id: "mode", value: "vibe" },
       { id: "autopilot", value: autopilot },
     ]);
+  });
+});
+
+describe("kiroT3McpBlockedReason", () => {
+  it("explains a registry-only policy that filtered T3's server", () => {
+    for (const status of Object.values(fixture.mcpStatus)) {
+      expect(kiroT3McpBlockedReason(status)).toMatch(/organization's MCP registry/);
+    }
+  });
+
+  it("ignores policies that filtered only other servers", () => {
+    const { settled } = fixture.mcpStatus;
+    expect(
+      kiroT3McpBlockedReason({
+        ...settled,
+        accessModeFilteredServers: settled.accessModeFilteredServers.filter(
+          (name) => name !== "t3-code",
+        ),
+      }),
+    ).toBeUndefined();
+    expect(kiroT3McpBlockedReason({ sessionId: settled.sessionId })).toBeUndefined();
   });
 });

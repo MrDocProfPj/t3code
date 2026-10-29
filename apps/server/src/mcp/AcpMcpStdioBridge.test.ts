@@ -6,7 +6,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
-import { mcpToolSession, runAcpMcpStdioBridge } from "./AcpMcpStdioBridge.ts";
+import {
+  mcpToolSession,
+  parseAcpMcpCallArguments,
+  runAcpMcpStdioBridge,
+} from "./AcpMcpStdioBridge.ts";
 
 function makeHarness(responder: (request: Request) => Promise<Response> | Response) {
   const input = new NodeStream.PassThrough();
@@ -329,4 +333,25 @@ describe("AcpMcpStdioBridge", () => {
       expect(signal?.aborted).toBe(true);
     }),
   );
+});
+
+describe("parseAcpMcpCallArguments", () => {
+  const unicode = '{"task":"résumé ✓ \'quoted\'"}';
+  it.each([
+    ["inline JSON", ["delegate_task", '{"task":"x"}'], {}, { task: "x" }],
+    // PowerShell sets the variable instead of quoting JSON for a native program.
+    ["the environment", ["delegate_task"], { T3_ACP_MCP_ARGUMENTS: unicode }, JSON.parse(unicode)],
+    ["inline over the environment", ["t", "{}"], { T3_ACP_MCP_ARGUMENTS: '{"a":1}' }, {}],
+  ])("reads arguments from %s", (_name, args, env, expected) => {
+    expect(parseAcpMcpCallArguments(args, env)).toEqual({ tool: args[0], parsed: expected });
+  });
+
+  it.each([
+    [["tool"], {}, /requires/],
+    [[], { T3_ACP_MCP_ARGUMENTS: "{}" }, /requires/],
+    [["tool", "{"], {}, /valid JSON/],
+    [["tool", "[]"], {}, /JSON object/],
+  ])("rejects %j", (args, env, message) => {
+    expect(parseAcpMcpCallArguments(args, env)).toMatch(message);
+  });
 });
